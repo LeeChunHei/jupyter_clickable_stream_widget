@@ -29,7 +29,7 @@ class ClickableImageWidget(widget_HTML):
     
     data = traitlets.Any()
     
-    def __init__(self, width:int, height:int) -> None:
+    def __init__(self, width:int, height:int, encoder:str = 'vp8enc') -> None:
         Gst.init(None)
         self.ws_port = self.get_free_port()
         assert self.ws_port != -1, "cannot find a websocket port, maybe created too many ClickableImageWidget?"
@@ -37,6 +37,7 @@ class ClickableImageWidget(widget_HTML):
         self.ws_thread.start()
         self.width = width
         self.height = height
+        self.encoder = encoder
         self.blank_buff = Gst.Buffer.new_allocate(None, int(width*height*3), None)
         self.pipe = None
         self.webrtc = None
@@ -144,7 +145,7 @@ class ClickableImageWidget(widget_HTML):
         return
 
     def start_pipeline(self):
-        self.pipe = Gst.parse_launch(f'appsrc name=src emit-signals=True is-live=True max-latency=0 min-latency=0 do-timestamp=True caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate=0/1 ! videoconvert ! queue ! omxvp8enc ! rtpvp8pay ! queue ! application/x-rtp,media=video,encoding-name=VP8,payload=97 ! webrtcbin name=sendrecv bundle-policy=max-bundle stun-server=stun://stun.l.google.com:19302')
+        self.pipe = Gst.parse_launch(f'appsrc name=src emit-signals=True is-live=True max-latency=0 min-latency=0 do-timestamp=True caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate=0/1 ! videoconvert ! queue ! {self.encoder} ! rtpvp8pay ! queue ! application/x-rtp,media=video,encoding-name=VP8,payload=97 ! webrtcbin name=sendrecv bundle-policy=max-bundle stun-server=stun://stun.l.google.com:19302')
         self.webrtc = self.pipe.get_by_name('sendrecv')
         self.webrtc.connect('on-negotiation-needed', self.on_negotiation_needed)
         self.webrtc.connect('on-ice-candidate', self.send_ice_candidate_message)
