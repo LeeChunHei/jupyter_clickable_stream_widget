@@ -47,6 +47,7 @@ class ClickableImageWidget(widget_HTML):
         self.uuid = str(uuid4()).replace('-','')
         self.js_var_name = f"image_widget_{self.uuid}"
         self.video_class_name = f"stream_widget_{self.uuid}"
+        self.can_emit = True
         super().__init__(value=f"""<video class="{self.video_class_name}" autoplay playsinline muted style="padding: 0;margin: 0;">Your browser does not support video</video>""")
         
     def get_free_port(self) -> int:
@@ -85,7 +86,6 @@ class ClickableImageWidget(widget_HTML):
         self.start_pipeline()
         try:
             async for message in websocket:
-#                 print(f"{message} from {websocket}")
                 msg = json.loads(message)
                 if 'sdp' == msg['type']:
                     sdp = msg['data']
@@ -110,7 +110,6 @@ class ClickableImageWidget(widget_HTML):
                     event['eventData']['naturalHeight'] = self.height
                     self.click_callback(self, event, [])
         except websockets.exceptions.ConnectionClosedError:
-#             print("closed error")
             return
         self.connected_ws = None
 
@@ -145,7 +144,7 @@ class ClickableImageWidget(widget_HTML):
         return
 
     def start_pipeline(self):
-        self.pipe = Gst.parse_launch(f'appsrc name=src emit-signals=True is-live=True max-latency=0 min-latency=0 do-timestamp=True caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate=0/1 ! videoconvert ! queue ! {self.encoder} ! rtpvp8pay ! queue ! application/x-rtp,media=video,encoding-name=VP8,payload=97 ! webrtcbin name=sendrecv bundle-policy=max-bundle stun-server=stun://stun.l.google.com:19302')
+        self.pipe = Gst.parse_launch(f'appsrc name=src emit-signals=True is-live=True max-latency=0 min-latency=0 do-timestamp=True caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate=0/1 ! videoconvert ! queue max-size-buffers=1 ! {self.encoder} ! rtpvp8pay ! application/x-rtp,media=video,encoding-name=VP8,payload=97 ! webrtcbin name=sendrecv bundle-policy=max-bundle stun-server=stun://stun.l.google.com:19302')
         self.webrtc = self.pipe.get_by_name('sendrecv')
         self.webrtc.connect('on-negotiation-needed', self.on_negotiation_needed)
         self.webrtc.connect('on-ice-candidate', self.send_ice_candidate_message)
@@ -153,22 +152,25 @@ class ClickableImageWidget(widget_HTML):
         self.appsrc = self.pipe.get_by_name('src')
         self.appsrc.set_property("format", Gst.Format.TIME)
         self.appsrc.set_property("block", True)  # block push-buffers when queue is full
+        self.appsrc.connect("need-data", self.on_need_data, None)
         self.bus = self.pipe.get_bus()
         self.pipe.set_state(Gst.State.PLAYING)
-#         print("starting pipeline")
         self.appsrc.emit("push-buffer", self.blank_buff)
-#         print("pipeline started")
 
     def close_pipeline(self):
         self.pipe.set_state(Gst.State.NULL)
         self.pipe = None
         self.webrtc = None
         
+    def on_need_data(self, source, size, data):
+        self.can_emit = True
+        
     @traitlets.observe('data')
     def on_value_change(self, change):
-        if self.appsrc:
+        if self.appsrc and self.can_emit:
             buffer = Gst.Buffer.new_wrapped(change['new'].tobytes())
             self.appsrc.emit("push-buffer", buffer)
+            self.can_emit = False
     
     def on_msg(self, callback_func):
         self.click_callback = callback_func
